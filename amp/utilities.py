@@ -410,6 +410,126 @@ class FileDatabase:
         for file in loosefiles:
             os.remove(os.path.join(self.loosepath, file))
 
+class SilentDatabase:
+    """This class is an optional direct replacement for the FileDatabase class.
+    This class has been created in order to pass database information without
+    ever writing to an actual file. This should be much faster than the stock
+    implementation, and is designed for cases where several hundred
+    implementations need to be done each second (e.g. real-time simulations).
+
+    There is no need to pickle, as objects are just assigned to the class and
+    and are not saved to individual files. It is worth noting, however, that
+    because these fingerprints are only around for the life of the program,
+    it is impossible to analyze the fingerprints after the execution of code.
+    """
+
+    def __init__(self,location): #not sure if location is needed but it may be
+        """Open the filename at specified location. flag is ignored; this
+        format is always capable of both reading and writing."""
+        self._memdict = {}  # Items already accessed; stored in memory.
+        self.keys = []
+
+    @classmethod
+    def open(Cls, filename, flag=None):
+        """Open present for compatibility with shelve. flag is ignored; this
+        format is always capable of both reading and writing.
+        """
+        return Cls(location=filename)
+
+    def close(self):
+        """Only present for compatibility with shelve.
+        """
+        return
+
+    def keys(self):
+        """Return list of keys, both of in-memory and out-of-memory
+        items.
+        """
+        return keys
+
+    def values(self):
+        """Return list of values, both of in-memory and out-of-memory
+        items. This moves all out-of-memory items into memory.
+        """
+        keys = self.keys()
+        return [self[key] for key in keys]
+
+    def __len__(self):
+        return len(self.keys())
+
+    def __setitem__(self, key, value):
+        self._memdict[key] = value
+        path = os.path.join(self.loosepath, str(key))
+        if os.path.exists(path):
+            with open(path, 'rb') as f:
+                contents = self._repeat_read(f)
+                if pickle.dumps(contents) == pickle.dumps(value):
+                    # Using pickle as a hash...
+                    return  # Nothing to update.
+        with open(path, 'wb') as f:
+            pickle.dump(value, f, protocol=0)
+
+    def _repeat_read(self, f, maxtries=5, sleep=0.2):
+        """If one process is writing, the other process cannot read without
+        errors until it finishes. Reads file-like object f checking for
+        errors, and retries up to 'maxtries' times, sleeping 'sleep' sec
+        between tries."""
+        tries = 0
+        while tries < maxtries:
+            try:
+                contents = pickle.load(f)
+            except (UnicodeDecodeError, EOFError, pickle.UnpicklingError):
+                time.sleep(0.2)
+                tries += 1
+            else:
+                return contents
+        raise IOError('Too many file read attempts.')
+
+    def __getitem__(self, key):
+        if key in self._memdict:
+            return self._memdict[key]
+        keypath = os.path.join(self.loosepath, key)
+        if os.path.exists(keypath):
+            with open(keypath, 'rb') as f:
+                return self._repeat_read(f)
+        elif os.path.exists(self.tarpath):
+            with tarfile.open(self.tarpath) as tf:
+                return pickle.load(tf.extractfile(key))
+        else:
+            raise KeyError(str(key))
+
+    def update(self, newitems):
+        for key, value in newitems.items():
+            self.__setitem__(key, value)
+
+    def archive(self):
+        """Cleans up to save disk space and reduce huge number of files.
+
+        That is, puts all files into an archive.  Compresses all files in
+        <path>/loose and places them in <path>/archive.tar.gz.  If archive
+        exists, appends/modifies.
+        """
+        loosefiles = os.listdir(self.loosepath)
+        print('Contains %i loose entries.' % len(loosefiles))
+        if len(loosefiles) == 0:
+            print(' -> No action taken.')
+            return
+        if os.path.exists(self.tarpath):
+            with tarfile.open(self.tarpath) as tf:
+                names = [_ for _ in tf.getnames() if _ not in
+                         os.listdir(self.loosepath)]
+                for name in names:
+                    tf.extract(member=name, path=self.loosepath)
+        loosefiles = os.listdir(self.loosepath)
+        print('Compressing %i entries.' % len(loosefiles))
+        with tarfile.open(self.tarpath, 'w:gz') as tf:
+            for file in loosefiles:
+                tf.add(name=os.path.join(self.loosepath, file),
+                       arcname=file)
+        print('Cleaning up: removing %i files.' % len(loosefiles))
+        for file in loosefiles:
+            os.remove(os.path.join(self.loosepath, file))
+
 
 class Data:
     """Serves as a container (dictionary-like) for (key, value) pairs that
