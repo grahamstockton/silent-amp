@@ -427,7 +427,6 @@ class SilentDatabase:
         """Open the filename at specified location. flag is ignored; this
         format is always capable of both reading and writing."""
         self._memdict = {}  # Items already accessed; stored in memory.
-        self.keys = []
 
     @classmethod
     def open(Cls, filename, flag=None):
@@ -445,29 +444,19 @@ class SilentDatabase:
         """Return list of keys, both of in-memory and out-of-memory
         items.
         """
-        return keys
+        return self._memdict.keys()
 
     def values(self):
         """Return list of values, both of in-memory and out-of-memory
         items. This moves all out-of-memory items into memory.
         """
-        keys = self.keys()
-        return [self[key] for key in keys]
+        return self._memdict.values()
 
     def __len__(self):
         return len(self.keys())
 
     def __setitem__(self, key, value):
         self._memdict[key] = value
-        path = os.path.join(self.loosepath, str(key))
-        if os.path.exists(path):
-            with open(path, 'rb') as f:
-                contents = self._repeat_read(f)
-                if pickle.dumps(contents) == pickle.dumps(value):
-                    # Using pickle as a hash...
-                    return  # Nothing to update.
-        with open(path, 'wb') as f:
-            pickle.dump(value, f, protocol=0)
 
     def _repeat_read(self, f, maxtries=5, sleep=0.2):
         """If one process is writing, the other process cannot read without
@@ -488,13 +477,6 @@ class SilentDatabase:
     def __getitem__(self, key):
         if key in self._memdict:
             return self._memdict[key]
-        keypath = os.path.join(self.loosepath, key)
-        if os.path.exists(keypath):
-            with open(keypath, 'rb') as f:
-                return self._repeat_read(f)
-        elif os.path.exists(self.tarpath):
-            with tarfile.open(self.tarpath) as tf:
-                return pickle.load(tf.extractfile(key))
         else:
             raise KeyError(str(key))
 
@@ -503,33 +485,7 @@ class SilentDatabase:
             self.__setitem__(key, value)
 
     def archive(self):
-        """Cleans up to save disk space and reduce huge number of files.
-
-        That is, puts all files into an archive.  Compresses all files in
-        <path>/loose and places them in <path>/archive.tar.gz.  If archive
-        exists, appends/modifies.
-        """
-        loosefiles = os.listdir(self.loosepath)
-        print('Contains %i loose entries.' % len(loosefiles))
-        if len(loosefiles) == 0:
-            print(' -> No action taken.')
-            return
-        if os.path.exists(self.tarpath):
-            with tarfile.open(self.tarpath) as tf:
-                names = [_ for _ in tf.getnames() if _ not in
-                         os.listdir(self.loosepath)]
-                for name in names:
-                    tf.extract(member=name, path=self.loosepath)
-        loosefiles = os.listdir(self.loosepath)
-        print('Compressing %i entries.' % len(loosefiles))
-        with tarfile.open(self.tarpath, 'w:gz') as tf:
-            for file in loosefiles:
-                tf.add(name=os.path.join(self.loosepath, file),
-                       arcname=file)
-        print('Cleaning up: removing %i files.' % len(loosefiles))
-        for file in loosefiles:
-            os.remove(os.path.join(self.loosepath, file))
-
+        """Just here for compatability"""
 
 class Data:
     """Serves as a container (dictionary-like) for (key, value) pairs that
@@ -552,11 +508,12 @@ class Data:
     >>> values = data.d.values()
     """
 
-    def __init__(self, filename, db=FileDatabase, calculator=None):
+    def __init__(self, filename, db=FileDatabase, sdb=None, calculator=None):
         self.calc = calculator
         self.db = db
         self.filename = filename
         self.d = None
+        self.sdb = sdb
 
     def calculate_items(self, images, parallel, log=None):
         """Calculates the data value with 'calculator' for the specified
@@ -571,7 +528,10 @@ class Data:
             self.d.close()
             self.d = None
         log(' Data stored in file %s.' % self.filename)
-        d = self.db.open(self.filename, 'r')
+        if self.sdb:
+            d = self.sdb
+        else:
+            d = self.db.open(self.filename, 'r')
         calcs_needed = list(set(images.keys()).difference(d.keys()))
         dblength = len(d)
         d.close()
@@ -581,7 +541,10 @@ class Data:
         if len(calcs_needed) == 0:
             return
         if parallel['cores'] == 1:
-            d = self.db.open(self.filename, 'c')
+            if self.sdb:
+                d = self.sdb
+            else:
+                d = self.db.open(self.filename, 'c')
             for key in calcs_needed:
                 d[key] = self.calc.calculate(images[key], key)
             d.close()  # Necessary to get out of write mode and unlock?
@@ -656,8 +619,10 @@ class Data:
     def open(self, mode='r'):
         """Open the database connection with mode specified.
         """
-        if self.d is None:
+        if self.d is None and self.sdb is None:
             self.d = self.db.open(self.filename, mode)
+        elif self.d is None and self.sdb is not None:
+            self.d = self.sdb
 
     def __del__(self):
         self.close()

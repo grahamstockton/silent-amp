@@ -61,7 +61,7 @@ class Gaussian(object):
 
     def __init__(self, cutoff=Cosine(6.5), Gs=None, dblabel=None,
                  elements=None, version=None, fortran=True,
-                 mode='atom-centered'):
+                 mode='atom-centered', verbose=True):
 
         # Check of the version of descriptor, particularly if restarting.
         compatibleversions = ['2015.12', ]
@@ -103,6 +103,17 @@ class Gaussian(object):
         self.dblabel = dblabel
         self.fortran = fortran
         self.parent = None  # Can hold a reference to main Amp instance.
+        self.verbose = verbose
+
+        # Create a database for silent mode
+        if self.verbose == 0:
+            self.sdb_fingerprints = SilentDatabase()
+            self.sdb_primes = SilentDatabase()
+            self.sdb_neighborlists = SilentDatabase()
+        else:
+            self.sdb_fingerprints = None
+            self.sdb_primes = None
+            self.sdb_neighborlists = None
 
     def tostring(self):
         """Returns an evaluatable representation of the calculator that can
@@ -184,7 +195,7 @@ class Gaussian(object):
             calc = NeighborlistCalculator(cutoff=p.cutoff['kwargs']['Rc'])
             self.neighborlist = \
                 Data(filename='%s-neighborlists' % self.dblabel,
-                     calculator=calc)
+                     calculator=calc, sdb=self.sdb_neighborlists)
         self.neighborlist.calculate_items(images, parallel=parallel, log=log)
         log('...neighborlists calculated.', toc='nl')
 
@@ -196,7 +207,7 @@ class Gaussian(object):
                                          fortran=self.fortran)
             self.fingerprints = Data(filename='%s-fingerprints'
                                      % self.dblabel,
-                                     calculator=calc)
+                                     calculator=calc, sdb=self.sdb_fingerprints)
         self.fingerprints.calculate_items(images, parallel=parallel, log=log)
         log('...fingerprints calculated.', toc='fp')
 
@@ -211,8 +222,8 @@ class Gaussian(object):
                                                fortran=self.fortran)
                 self.fingerprintprimes = \
                     Data(filename='%s-fingerprint-primes'
-                         % self.dblabel,
-                         calculator=calc)
+                         % self.dblabel,self.fingerprints
+                         calculator=calc, sdb=self.sdb_primes)
             self.fingerprintprimes.calculate_items(
                 images, parallel=parallel, log=log)
             log('...fingerprint derivatives calculated.', toc='derfp')
@@ -1207,7 +1218,7 @@ def calculate_G2_prime(neighborindices, neighbornumbers, neighborsymbols, neighb
 
 
 def calculate_G4_prime(neighborindices, neighbornumbers, neighborsymbols, neighborpositions,
-                       G_elements, gamma, zeta, eta, theta_s, 
+                       G_elements, gamma, zeta, eta, theta_s,
                        cutoff, i, Ri, m, l, fortran):
     """Calculates coordinate derivative of G4 symmetry function for atom at
     index i and position Ri with respect to coordinate x_{l} of atom index m.
